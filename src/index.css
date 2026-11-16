@@ -1,0 +1,32 @@
+@import "tailwindcss";
+
+@theme {
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --color-hud: rgba(255, 255, 255, 0.04);
+  --color-hud-line: rgba(255, 255, 255, 0.12);
+  --color-ember: #ff8a2a;
+  --color-gold: #ffd27a;
+  --color-plasma: #4da3ff;
+}
+
+html, body, #root { height: 100%; margin: 0; background: #000; overflow: hidden; }
+body { color: #e8e8e8; font-family: var(--font-mono); -webkit-font-smoothing: antialiased; }
+
+.hud-panel {
+  background: rgba(8, 8, 10, 0.42);
+  border: 1px solid var(--color-hud-line);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-radius: 6px;
+}
+.hud-title { letter-spacing: 0.18em; text-transform: uppercase; font-size: 10px; color: rgba(255,255,255,0.55); }
+.scrollbar-thin::-webkit-scrollbar { width: 4px; }
+.scrollbar-thin::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 2px; }
+
+@keyframes pulse-dot { 0%,100% { opacity: 1; transform: scale(1);} 50% { opacity: .35; transform: scale(.7);} }
+.pulse-dot { animation: pulse-dot 1.4s ease-in-out infinite; }
+
+/* lil-gui em dark mode combinando com o HUD */
+.lil-gui { --background-color: rgba(8,8,10,.85); --font-family: "JetBrains Mono", monospace; --focus-color: #ff8a2a; --number-color: #ffd27a; z-index: 50 !important; }
+
+@media (prefers-reduced-motion: reduce) { .pulse-dot { animation: none; } }
