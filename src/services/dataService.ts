@@ -23,6 +23,8 @@ export interface GeoArc {
   /** 0..1 — define densidade e velocidade das partículas */
   weight: number
   born: number
+  /** evento de origem (modo sísmico), usado pela linha do tempo */
+  eventId?: string
 }
 
 export interface Snapshot {
@@ -120,6 +122,7 @@ function quakesToSnapshot(features: UsgsFeature[], status: FeedStatus, source: s
       to: { lat: c.lat, lon: c.lon },
       weight: 0.35 + e.intensity * 0.65,
       born: now,
+      eventId: e.id,
     })),
   )
   return { status, events, arcs, fetchedAt: now, source }
