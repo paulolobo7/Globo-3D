@@ -129,7 +129,10 @@ export class GlobeScene {
     globeScale: 1,
     atmosphere: 0.6,
     iridescence: 0.22,
-    dotSize: 2.1,
+    dotSize: 1.55,
+    landBrightness: 0.75,
+    coastline: 0.55,
+    landFill: 1,
     autoRotate: 0.35,
   }
 
@@ -275,6 +278,9 @@ export class GlobeScene {
     globe.add(p, 'atmosphere', 0, 3, 0.01).name('Atmosfera').onChange((v: number) => (this.earth.atmosphereIntensity = v))
     globe.add(p, 'iridescence', 0, 2, 0.01).name('Iridescência').onChange((v: number) => (this.earth.iridescence = v))
     globe.add(p, 'dotSize', 0.5, 6, 0.05).name('Tamanho dos pontos').onChange((v: number) => (this.earth.dotSize = v))
+    globe.add(p, 'landBrightness', 0, 3, 0.01).name('Brilho dos continentes').onChange((v: number) => (this.earth.dotBrightness = v))
+    globe.add(p, 'coastline', 0, 2, 0.01).name('Litoral').onChange((v: number) => (this.earth.coastOpacity = v))
+    globe.add(p, 'landFill', 0, 3, 0.01).name('Preenchimento da terra').onChange((v: number) => (this.earth.landFill = v))
     globe.add(p, 'autoRotate', 0, 3, 0.01).name('Rotação automática').onChange((v: number) => (this.controls.autoRotateSpeed = v))
     gui.add({ copiar: () => navigator.clipboard?.writeText(JSON.stringify(p, null, 2)) }, 'copiar').name('Copiar valores (JSON)')
     gui.hide()
