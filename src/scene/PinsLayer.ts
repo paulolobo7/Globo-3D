@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import type { GeoEvent } from '../services/dataService'
 import { latLonToVector3 } from '../utils/geo'
+import { depthClass } from '../utils/depth'
 
 /**
  * Pins como mini "erupções": núcleo incandescente, ondas de choque concêntricas,
@@ -10,11 +11,13 @@ import { latLonToVector3 } from '../utils/geo'
 const ringVertex = /* glsl */ `
   attribute float aSeed;
   attribute float aIntensity;
+  attribute vec3 aTint;
   varying vec2 vUv;
   varying float vSeed;
   varying float vIntensity;
+  varying vec3 vTint;
   void main() {
-    vUv = uv; vSeed = aSeed; vIntensity = aIntensity;
+    vUv = uv; vSeed = aSeed; vIntensity = aIntensity; vTint = aTint;
     gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(position, 1.0);
   }
 `
@@ -24,6 +27,7 @@ const ringFragment = /* glsl */ `
   varying vec2 vUv;
   varying float vSeed;
   varying float vIntensity;
+  varying vec3 vTint;
   vec3 heat(float w) {
     vec3 c = mix(vec3(1.0, 0.95, 0.85), vec3(1.0, 0.5, 0.1), smoothstep(0.0, 0.45, w));
     return mix(c, vec3(0.9, 0.08, 0.05), smoothstep(0.45, 1.0, w));
@@ -36,7 +40,7 @@ const ringFragment = /* glsl */ `
     for (int i = 0; i < 3; i++) {
       float w = fract(uTime * (0.35 + vIntensity * 0.4) + float(i) / 3.0 + vSeed);
       float ring = smoothstep(0.06, 0.0, abs(r - w)) * (1.0 - w);
-      col += heat(w) * ring;
+      col += mix(heat(w), vTint, 0.55) * ring;
       alpha += ring;
     }
     float glow = smoothstep(0.35, 0.0, r) * 0.6;
@@ -82,27 +86,35 @@ const coreVertex = /* glsl */ `
   uniform float uPixelRatio;
   attribute vec2 aData; // intensidade, seed
   attribute float aSelected;
+  attribute vec3 aTint;
+  attribute float aBorn;
   varying float vIntensity;
   varying float vSelected;
+  varying vec3 vTint;
+  varying float vFlash;
   void main() {
-    vIntensity = aData.x; vSelected = aSelected;
+    vIntensity = aData.x; vSelected = aSelected; vTint = aTint;
+    float age = uTime - aBorn;
+    vFlash = age < 0.0 ? 0.0 : exp(-age * 2.2); // clarão ao nascer (linha do tempo / dados novos)
     vec4 mv = modelViewMatrix * vec4(position, 1.0);
     gl_Position = projectionMatrix * mv;
     float pulse = 0.8 + 0.2 * sin(uTime * 4.0 + aData.y * 30.0);
-    gl_PointSize = uSize * uPixelRatio * (0.4 + aData.x * 1.4) * pulse * (1.0 + aSelected * 1.5) / -mv.z;
+    gl_PointSize = uSize * uPixelRatio * (0.4 + aData.x * 1.4) * pulse * (1.0 + aSelected * 1.5 + vFlash * 2.5) / -mv.z;
   }
 `
 const coreFragment = /* glsl */ `
   varying float vIntensity;
   varying float vSelected;
+  varying vec3 vTint;
+  varying float vFlash;
   void main() {
     float d = length(gl_PointCoord - 0.5) * 2.0;
     if (d > 1.0) discard;
     float core = exp(-d * d * 10.0);
     float halo = exp(-d * 3.5) * 0.5;
-    vec3 col = mix(vec3(1.0, 0.45, 0.12), vec3(1.0, 0.97, 0.9), core);
+    vec3 col = mix(vTint, vec3(1.0, 0.97, 0.9), core);
     col = mix(col, vec3(0.5, 0.85, 1.0), vSelected * (1.0 - core) * 0.6);
-    gl_FragColor = vec4(col * (0.7 + vIntensity * 1.3), core + halo);
+    gl_FragColor = vec4(col * (0.7 + vIntensity * 1.3 + vFlash * 1.5), core + halo);
   }
 `
 
@@ -146,6 +158,11 @@ export class PinsLayer {
   private flareAnchors: { pos: THREE.Vector3; strength: number }[] = []
   private events: GeoEvent[] = []
   private selectedId: string | null = null
+  private bornAt = new Map<string, number>()
+  private clock = 0
+  private firstLoad = true
+  /** Cor por profundidade (modo sísmico). Desligado = laranja padrão. */
+  colorByDepth = true
   flaresEnabled = true
 
   constructor(pixelRatio: number) {
@@ -157,6 +174,7 @@ export class PinsLayer {
     const plane = new THREE.PlaneGeometry(1, 1)
     plane.setAttribute('aSeed', new THREE.InstancedBufferAttribute(new Float32Array(MAX_PINS), 1))
     plane.setAttribute('aIntensity', new THREE.InstancedBufferAttribute(new Float32Array(MAX_PINS), 1))
+    plane.setAttribute('aTint', new THREE.InstancedBufferAttribute(new Float32Array(MAX_PINS * 3), 3))
     this.rings = new THREE.InstancedMesh(plane, this.ringMat, MAX_PINS)
     this.rings.count = 0
     this.rings.frustumCulled = false
@@ -217,6 +235,15 @@ export class PinsLayer {
     const up = new THREE.Vector3(0, 0, 1)
     const seeds = this.rings.geometry.getAttribute('aSeed') as THREE.InstancedBufferAttribute
     const ints = this.rings.geometry.getAttribute('aIntensity') as THREE.InstancedBufferAttribute
+    const tints = this.rings.geometry.getAttribute('aTint') as THREE.InstancedBufferAttribute
+    const coreTint = new Float32Array(n * 3), coreBorn = new Float32Array(n)
+    const defaultTint = new THREE.Color('#ff7326')
+    const tmp = new THREE.Color()
+    // registra quando cada pin apareceu (no primeiro carregamento não há clarão)
+    const ids = new Set(this.events.map((e) => e.id))
+    for (const id of this.bornAt.keys()) if (!ids.has(id)) this.bornAt.delete(id)
+    for (const e of this.events) if (!this.bornAt.has(e.id)) this.bornAt.set(e.id, this.firstLoad ? -100 : this.clock)
+    if (this.events.length) this.firstLoad = false
 
     const corePos = new Float32Array(n * 3), coreData = new Float32Array(n * 2), coreSel = new Float32Array(n)
     const sparkPos: number[] = [], sparkDir: number[] = [], sparkData: number[] = []
@@ -232,6 +259,11 @@ export class PinsLayer {
       this.rings.setMatrixAt(i, m)
       seeds.setX(i, Math.random())
       ints.setX(i, e.intensity)
+      const dc = this.colorByDepth ? depthClass(e.depthKm) : null
+      tmp.copy(dc ? tmp.set(dc.color) : defaultTint)
+      tints.setXYZ(i, tmp.r, tmp.g, tmp.b)
+      tmp.toArray(coreTint, i * 3)
+      coreBorn[i] = this.bornAt.get(e.id) ?? -100
 
       v.toArray(corePos, i * 3)
       coreData[i * 2] = e.intensity
@@ -258,11 +290,14 @@ export class PinsLayer {
     this.rings.instanceMatrix.needsUpdate = true
     seeds.needsUpdate = true
     ints.needsUpdate = true
+    tints.needsUpdate = true
 
     const cg = new THREE.BufferGeometry()
     cg.setAttribute('position', new THREE.BufferAttribute(corePos, 3))
     cg.setAttribute('aData', new THREE.BufferAttribute(coreData, 2))
     cg.setAttribute('aSelected', new THREE.BufferAttribute(coreSel, 1))
+    cg.setAttribute('aTint', new THREE.BufferAttribute(coreTint, 3))
+    cg.setAttribute('aBorn', new THREE.BufferAttribute(coreBorn, 1))
     this.cores.geometry.dispose()
     this.cores.geometry = cg
 
@@ -282,7 +317,14 @@ export class PinsLayer {
     }))
   }
 
+  /** Ao trocar de fonte de dados, os pins novos não devem "explodir" todos de uma vez. */
+  resetBirths() { this.bornAt.clear(); this.firstLoad = true }
+
+  /** Lista atual (para o tooltip/picking). */
+  get current() { return this.events }
+
   update(t: number, camera: THREE.Camera, worldScale: number) {
+    this.clock = t
     this.ringMat.uniforms.uTime.value = t
     this.sparkMat.uniforms.uTime.value = t
     this.coreMat.uniforms.uTime.value = t

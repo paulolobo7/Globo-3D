@@ -10,6 +10,7 @@ import { EarthMesh } from './EarthMesh'
 import { ArcsLayer } from './ArcsLayer'
 import { PinsLayer } from './PinsLayer'
 import { RingsLayer } from './RingsLayer'
+import { BeaconLayer } from './BeaconLayer'
 import type { GeoArc, GeoEvent } from '../services/dataService'
 import { latLonToVector3 } from '../utils/geo'
 
@@ -86,6 +87,17 @@ const FinalShader = {
   `,
 }
 
+export interface FlyOptions {
+  /** distância final da câmera (raio do globo = 1) */
+  distance?: number
+  /** duração em segundos */
+  duration?: number
+  /** quanto a câmera "sobe" no meio do voo (efeito cinematográfico) */
+  hop?: number
+  /** segundos sem rotação automática depois de chegar */
+  hold?: number
+}
+
 export interface SceneStats { fps: number; particles: number; arcs: number; landDots: number }
 
 export class GlobeScene {
@@ -98,6 +110,7 @@ export class GlobeScene {
   readonly arcs: ArcsLayer
   readonly pins: PinsLayer
   readonly rings: RingsLayer
+  readonly beacon = new BeaconLayer()
   private composer: EffectComposer
   private bloom: UnrealBloomPass
   private finalPass: ShaderPass
@@ -107,10 +120,16 @@ export class GlobeScene {
   private time = 0
   private frames = 0
   private fpsTime = 0
-  private fly: { from: THREE.Vector3; to: THREE.Vector3; fromDist: number; toDist: number; t: number; dur: number } | null = null
+  private fly: { from: THREE.Vector3; to: THREE.Vector3; fromDist: number; toDist: number; t: number; dur: number; hop: number } | null = null
   private idleUntil = 0
   private reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
   onStats?: (s: SceneStats) => void
+  /** Pin sob o cursor (null = nenhum), com a posição do cursor na tela. */
+  onHover?: (e: GeoEvent | null, x: number, y: number) => void
+  /** Clique num pin. */
+  onPick?: (e: GeoEvent) => void
+  private hovered: GeoEvent | null = null
+  private downAt = { x: 0, y: 0 }
 
   readonly params = {
     bloomStrength: 1.6,
@@ -169,7 +188,7 @@ export class GlobeScene {
     this.arcs = new ArcsLayer(pr)
     this.pins = new PinsLayer(pr)
     this.rings = new RingsLayer(pr)
-    this.root.add(this.earth.group, this.rings.group, this.arcs.group, this.pins.group)
+    this.root.add(this.earth.group, this.rings.group, this.arcs.group, this.pins.group, this.beacon.group)
     this.root.rotation.z = THREE.MathUtils.degToRad(-8)
     this.scene.add(this.root)
     this.orientDisk(INTRO_VIEW.lat, INTRO_VIEW.lon)
@@ -195,6 +214,11 @@ export class GlobeScene {
     }
     this.gui = this.buildGui()
     window.addEventListener('resize', this.onResize)
+    const el = this.renderer.domElement
+    el.addEventListener('pointermove', this.onPointerMove)
+    el.addEventListener('pointerleave', this.onPointerLeave)
+    el.addEventListener('pointerdown', this.onPointerDown)
+    el.addEventListener('pointerup', this.onPointerUp)
     this.flyIntro()
     this.loop()
   }
@@ -209,22 +233,47 @@ export class GlobeScene {
   toggleGui() { this.gui._hidden ? this.gui.show() : this.gui.hide(); return !this.gui._hidden }
 
   /** Leva a câmera suavemente até lat/lon (interpolação esférica da direção + distância). */
-  flyTo(lat: number, lon: number, distance = 3.6) {
+  flyTo(lat: number, lon: number, opts: FlyOptions = {}) {
+    const { distance = 3.6, duration = 1.8, hop = 0, hold = 8 } = opts
     const target = latLonToVector3(lat, lon, 1).applyQuaternion(this.root.quaternion).normalize()
     this.fly = {
       from: this.camera.position.clone().normalize(),
       to: target,
       fromDist: this.camera.position.length(),
-      toDist: distance * this.params.globeScale,
+      toDist: Math.max(this.controls.minDistance, distance * this.params.globeScale),
       t: 0,
-      dur: this.reducedMotion ? 0.01 : 1.8,
+      dur: this.reducedMotion ? 0.01 : duration,
+      hop: this.reducedMotion ? 0 : hop,
     }
-    this.idleUntil = this.time + 8
+    this.idleUntil = this.time + duration + hold
   }
+
+  /** Aproximação cinematográfica: sobe, cruza o globo e mergulha até o local, com farol. */
+  focusPlace(lat: number, lon: number, distance = 2.35) {
+    this.beacon.show(lat, lon)
+    // mira um pouco ao sul do ponto: o feixe do farol fica em perspectiva, não apontado para a câmera
+    const viewLat = THREE.MathUtils.clamp(lat - 9, -80, 80)
+    const angle = this.camera.position.clone().normalize().angleTo(latLonToVector3(viewLat, lon, 1).applyQuaternion(this.root.quaternion).normalize())
+    this.flyTo(viewLat, lon, { distance, duration: 2.6 + angle * 0.6, hop: Math.min(1.8, 0.5 + angle * 0.7), hold: 14 })
+  }
+
+  /** Volta para a vista geral. */
+  resetView() {
+    this.beacon.hide()
+    this.flyTo(INTRO_VIEW.lat, INTRO_VIEW.lon, { distance: this.defaultDistance() / this.params.globeScale, duration: 2.2, hop: 0.4, hold: 2 })
+  }
+
+  /** Recomeça o "clarão de nascimento" dos pins (troca de fonte de dados). */
+  resetPinBirths() { this.pins.resetBirths() }
 
   dispose() {
     cancelAnimationFrame(this.raf)
     window.removeEventListener('resize', this.onResize)
+    const el = this.renderer.domElement
+    el.removeEventListener('pointermove', this.onPointerMove)
+    el.removeEventListener('pointerleave', this.onPointerLeave)
+    el.removeEventListener('pointerdown', this.onPointerDown)
+    el.removeEventListener('pointerup', this.onPointerUp)
     this.gui.destroy()
     this.controls.dispose()
     this.composer.dispose()
@@ -236,7 +285,7 @@ export class GlobeScene {
 
   private flyIntro() {
     const start = this.camera.position.clone()
-    this.fly = { from: start.clone().normalize(), to: latLonToVector3(INTRO_VIEW.lat, INTRO_VIEW.lon, 1).applyQuaternion(this.root.quaternion).normalize(), fromDist: start.length(), toDist: this.defaultDistance(), t: 0, dur: this.reducedMotion ? 0.01 : 3.2 }
+    this.fly = { from: start.clone().normalize(), to: latLonToVector3(INTRO_VIEW.lat, INTRO_VIEW.lon, 1).applyQuaternion(this.root.quaternion).normalize(), fromDist: start.length(), toDist: this.defaultDistance(), t: 0, dur: this.reducedMotion ? 0.01 : 3.2, hop: 0 }
   }
 
   /** Inclina o disco para ser visto quase de perfil a partir da vista inicial (como na referência). */
@@ -287,6 +336,40 @@ export class GlobeScene {
     return gui
   }
 
+  /** Pin mais próximo do cursor (em pixels), só no hemisfério visível. */
+  private pickAt(clientX: number, clientY: number): GeoEvent | null {
+    const rect = this.renderer.domElement.getBoundingClientRect()
+    const x = clientX - rect.left, y = clientY - rect.top
+    const world = new THREE.Vector3(), toCam = new THREE.Vector3()
+    let best: GeoEvent | null = null
+    let bestD = 22 // raio de captura em px
+    for (const e of this.pins.current) {
+      latLonToVector3(e.lat, e.lon, 1.004, world).applyMatrix4(this.root.matrixWorld)
+      toCam.copy(this.camera.position).sub(world).normalize()
+      if (world.clone().normalize().dot(toCam) < 0.1) continue
+      world.project(this.camera)
+      const sx = (world.x * 0.5 + 0.5) * rect.width, sy = (-world.y * 0.5 + 0.5) * rect.height
+      const d = Math.hypot(sx - x, sy - y)
+      if (d < bestD) { bestD = d; best = e }
+    }
+    return best
+  }
+
+  private onPointerMove = (ev: PointerEvent) => {
+    if (ev.buttons) return // arrastando: não faz picking
+    const hit = this.pickAt(ev.clientX, ev.clientY)
+    this.renderer.domElement.style.cursor = hit ? 'pointer' : ''
+    if (hit !== this.hovered || hit) this.onHover?.(hit, ev.clientX, ev.clientY)
+    this.hovered = hit
+  }
+  private onPointerLeave = () => { this.hovered = null; this.onHover?.(null, 0, 0) }
+  private onPointerDown = (ev: PointerEvent) => { this.downAt = { x: ev.clientX, y: ev.clientY } }
+  private onPointerUp = (ev: PointerEvent) => {
+    if (Math.hypot(ev.clientX - this.downAt.x, ev.clientY - this.downAt.y) > 5) return
+    const hit = this.pickAt(ev.clientX, ev.clientY)
+    if (hit) this.onPick?.(hit)
+  }
+
   private onResize = () => {
     const w = this.container.clientWidth, h = this.container.clientHeight
     this.camera.aspect = w / h
@@ -329,7 +412,7 @@ export class GlobeScene {
       f.t = Math.min(1, f.t + dt / f.dur)
       const e = f.t < 0.5 ? 4 * f.t ** 3 : 1 - (-2 * f.t + 2) ** 3 / 2 // easeInOutCubic
       const dir = slerpVectors(f.from, f.to, e)
-      const dist = THREE.MathUtils.lerp(f.fromDist, f.toDist, e)
+      const dist = THREE.MathUtils.lerp(f.fromDist, f.toDist, e) + Math.sin(Math.PI * e) * f.hop
       this.camera.position.copy(dir.multiplyScalar(dist))
       this.camera.lookAt(0, 0, 0)
       if (f.t >= 1) this.fly = null
@@ -340,6 +423,7 @@ export class GlobeScene {
     this.earth.update(t)
     this.rings.update(this.reducedMotion ? dt * 0.15 : dt)
     this.arcs.update(t)
+    this.beacon.update(t)
     this.root.updateMatrixWorld()
     this.pins.update(t, this.camera, this.params.globeScale)
     this.updateHotspots()
