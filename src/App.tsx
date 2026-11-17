@@ -51,6 +51,8 @@ export default function App() {
   const [tour, setTour] = useState(false)
   const [guiOpen, setGuiOpen] = useState(false)
   const [hudVisible, setHudVisible] = useState(true)
+  // celular: as informações começam recolhidas para não cobrir o globo
+  const [infoOpen, setInfoOpen] = useState(() => !window.matchMedia('(max-width: 700px)').matches)
   const [presentation, setPresentation] = useState(false)
   const [stats, setStats] = useState<SceneStats>({ fps: 0, particles: 0, arcs: 0, landDots: 0 })
   const [hover, setHover] = useState<Hover | null>(null)
@@ -243,6 +245,7 @@ export default function App() {
 
   const status = STATUS[snap?.status ?? 'conectando']
   const showHud = hudVisible && !presentation
+  const hideOnPhone = infoOpen ? '' : 'max-[700px]:hidden'
   const hoverDepth = hover ? depthClass(hover.e.depthKm) : null
 
   return (
@@ -316,7 +319,7 @@ export default function App() {
         </Panel>
 
         {/* inferior esquerdo: estatísticas + legenda */}
-        <Panel title={mode === 'sismico' ? 'Atividade sísmica · 24 h' : 'Tráfego global · simulado'} className="absolute bottom-4 left-4 w-[min(320px,calc(100vw-2rem))]">
+        <Panel title={mode === 'sismico' ? 'Atividade sísmica · 24 h' : 'Tráfego global · simulado'} className={`absolute bottom-4 left-4 w-[min(320px,calc(100vw-2rem))] ${hideOnPhone}`}>
           {mode === 'sismico' ? (
             <>
               <Stat label="Eventos (M2.5+)" value={visibleEvents.length} accent />
@@ -381,7 +384,7 @@ export default function App() {
 
         {/* lateral direita: feed retrátil */}
         <aside
-          className={`absolute right-4 top-4 flex max-h-[calc(100%-15rem)] w-[min(340px,calc(100vw-2rem))] flex-col transition-transform duration-500 ease-out ${feedOpen ? 'translate-x-0' : 'translate-x-[calc(100%+1.5rem)]'}`}
+          className={`absolute right-4 top-4 flex max-h-[calc(100%-15rem)] w-[min(340px,calc(100vw-2rem))] flex-col transition-transform duration-500 ease-out ${hideOnPhone} ${feedOpen ? 'translate-x-0' : 'translate-x-[calc(100%+1.5rem)]'}`}
           aria-hidden={!feedOpen}
         >
           <Panel
@@ -421,7 +424,7 @@ export default function App() {
         {!feedOpen && (
           <button
             onClick={() => setFeedOpen(true)}
-            className="hud-panel pointer-events-auto absolute right-4 top-4 min-h-11 px-3 text-[10px] uppercase tracking-[0.18em] text-white/70 hover:text-white focus-visible:ring-1 focus-visible:ring-ember"
+            className={`hud-panel pointer-events-auto absolute right-4 top-4 min-h-11 px-3 text-[10px] uppercase tracking-[0.18em] text-white/70 hover:text-white focus-visible:ring-1 focus-visible:ring-ember ${hideOnPhone}`}
           >
             Feed ‹ <kbd className="text-white/30">F</kbd>
           </button>
@@ -450,11 +453,18 @@ export default function App() {
         </Panel>
       </div>
 
-      {/* mobile: barra compacta de modo */}
+      {/* celular: botões de modo e de recolher/expandir as informações */}
       {showHud && (
-        <div className="pointer-events-auto absolute bottom-[19rem] left-1/2 hidden -translate-x-1/2 max-[700px]:block">
-          <button onClick={() => setMode((m) => (m === 'sismico' ? 'trafego' : 'sismico'))} className="hud-panel min-h-11 px-4 text-[11px] uppercase tracking-[0.16em] text-gold">
+        <div className={`pointer-events-auto absolute left-1/2 hidden -translate-x-1/2 gap-2 max-[700px]:flex ${infoOpen ? 'bottom-[19rem]' : 'bottom-4'}`}>
+          <button onClick={() => setMode((m) => (m === 'sismico' ? 'trafego' : 'sismico'))} className="hud-panel min-h-11 whitespace-nowrap px-4 text-[11px] uppercase tracking-[0.16em] text-gold focus-visible:ring-1 focus-visible:ring-ember">
             Modo: {mode === 'sismico' ? 'Sísmico' : 'Tráfego'}
+          </button>
+          <button
+            onClick={() => setInfoOpen((v) => !v)}
+            aria-expanded={infoOpen}
+            className="hud-panel min-h-11 whitespace-nowrap px-4 text-[11px] uppercase tracking-[0.16em] text-white/80 focus-visible:ring-1 focus-visible:ring-ember"
+          >
+            {infoOpen ? 'Minimizar ▾' : 'Info ▴'}
           </button>
         </div>
       )}
