@@ -18,7 +18,7 @@ Código: `src/services/dataService.ts` (`fetchEarthquakes`).
 - **Parâmetros:** nenhum. O feed é um arquivo fixo atualizado pelo USGS.
 - **Opções da requisição:** `cache: 'no-store'` e `AbortSignal`, para cancelar ao trocar de modo.
 - **Frequência:** uma chamada ao entrar no modo sísmico e depois a cada **60 segundos** (`QUAKE_REFRESH_MS` em `src/App.tsx`).
-- **Custo:** gratuito, sem limite documentado para esse uso. O arquivo é pequeno e fica em cache de CDN.
+- **Custo:** gratuito. O arquivo é pequeno, e 1 chamada por minuto é um uso leve.
 
 ### Campos usados da resposta
 
@@ -48,7 +48,7 @@ Se a chamada falhar por rede, bloqueio ou status diferente de 200, o app **não 
 
 ### Pontos de atenção
 
-- O USGS permite CORS, por isso funciona direto do navegador, inclusive na Vercel.
+- O feed é público e feito para consumo direto de páginas web. Não foi possível testar a chamada no ambiente de desenvolvimento (rede bloqueada), então vale conferir uma vez no site publicado.
 - O feed só traz as últimas 24 horas. A linha do tempo não volta além disso.
 - Os horários chegam em UTC e são convertidos no navegador.
 
@@ -105,7 +105,6 @@ Cabeçalho: `Accept: application/json`. Também usa `AbortSignal`.
 | Países | pacote npm `world-atlas` (`countries-110m.json`) | busca local (`geocodeService.ts`) |
 | 32 cidades-hub | lista fixa em `dataService.ts` | modo tráfego e busca local |
 | Tráfego entre cidades | **simulado** em `makeTrafficArc` | modo tráfego. Os "Gb/s" e os tipos (CDN, Backup...) são sorteados, não medidos |
-| Fonte JetBrains Mono | declarada no CSS | interface |
 
 Os dois arquivos do `world-atlas` são lidos no momento do build, então o mapa funciona **sem rede**. O tráfego do modo "tráfego" é ilustrativo e não deve ser apresentado como dado real.
 
